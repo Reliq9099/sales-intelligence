@@ -5,6 +5,7 @@ from html import escape
 import streamlit as st
 
 from config import settings
+from crm import accounts_csv, contact_template_csv, contacts_csv, import_accounts_csv, import_contacts_csv, PIPELINE_STATUSES, list_accounts, list_contacts, list_prospects, save_account, save_contact, save_prospect
 from data import Confidence, Opportunity, TriState
 from research import research_company
 from sales_action import build_sales_action
@@ -55,6 +56,7 @@ with st.sidebar:
     st.divider()
     st.markdown("**Research settings**")
     st.selectbox("Provider", [settings.research_provider.title()], disabled=True)
+    st.selectbox("Depth", [settings.research_depth.upper()], disabled=True)
     st.checkbox("Show evidence", value=True)
     st.checkbox("Include unknown signals", value=True)
     st.divider()
@@ -66,6 +68,11 @@ with st.form("research_form"):
     search_col, button_col = st.columns([5, 1], vertical_alignment="bottom")
     with search_col:
         company_name = st.text_input("Company to research", placeholder="Try Tata Motors", label_visibility="visible")
+        provided_evidence = st.text_area(
+            "Optional research URLs or notes",
+            placeholder="Paste Google/Brave/DuckDuckGo URLs, one per line. Add a note after a | if useful.",
+            height=90,
+        )
     with button_col:
         submitted = st.form_submit_button("Research", type="primary", width="stretch")
 
@@ -73,17 +80,102 @@ if submitted:
     if not company_name.strip():
         st.warning("Enter a company name to begin research.")
         st.stop()
-    with st.spinner("Building the qualification brief..."):
+    with st.status(f"Researching {company_name.strip()}...", expanded=True) as research_status:
         try:
-            result = research_company(company_name)
+            st.write("Resolving company identity and planning focused research")
+            result = research_company(company_name, provided_evidence=provided_evidence)
+            st.write(f"Collected {result.useful_result_count} useful evidence records")
             qualification = qualify_company(result)
             qualification.sales_action_layer = build_sales_action(result, qualification)
+            save_account(
+                company=result.overview.name,
+                website=result.overview.website,
+                industry=result.overview.industry,
+                research_quality=result.research_quality_score,
+                sales_score=qualification.sales_score,
+                recommendation=qualification.sales_action,
+                solution=qualification.solution_recommendation,
+                research_status=qualification.sales_action_layer.research_confidence,
+                next_action=qualification.sales_action_layer.next_action,
+                research_updated_at=result.research_audit.get("started_at", ""),
+            )
             st.session_state["result"] = result
             st.session_state["qualification"] = qualification
             st.session_state["normalized_name"] = normalize_company_name(company_name)
+            research_status.update(label="Research complete", state="complete", expanded=False)
         except Exception as error:
+            research_status.update(label="Research failed", state="error", expanded=True)
             st.error("Research could not be completed. Please try again.")
             st.caption(f"Specific error: {error}")
+
+with st.expander("CRM accounts and contacts", expanded="result" not in st.session_state):
+    export_col, template_col = st.columns(2)
+    with export_col:
+        st.download_button("Export accounts CSV", data=accounts_csv(), file_name="bwc_accounts.csv", mime="text/csv", width="stretch")
+        st.download_button("Export contacts CSV", data=contacts_csv(), file_name="bwc_contacts.csv", mime="text/csv", width="stretch")
+    with template_col:
+        st.download_button("Download contact template", data=contact_template_csv(), file_name="bwc_contacts_template.csv", mime="text/csv", width="stretch")
+        st.caption("Edit the CSV in Excel or Sheets, then use it as a clean reference for entering contacts.")
+    st.markdown("**Import CSV data**")
+    import_accounts_col, import_contacts_col = st.columns(2)
+    with import_accounts_col:
+        accounts_file = st.file_uploader("Accounts CSV", type="csv", key="accounts_csv_upload")
+        if accounts_file is not None and st.button("Import accounts", key="import_accounts_button"):
+            imported, errors = import_accounts_csv(accounts_file.getvalue())
+            if imported:
+                st.success(f"Imported or updated {imported} account(s).")
+            for error in errors:
+                st.warning(error)
+    with import_contacts_col:
+        contacts_file = st.file_uploader("Contacts CSV", type="csv", key="contacts_csv_upload")
+        if contacts_file is not None and st.button("Import contacts", key="import_contacts_button"):
+            imported, errors = import_contacts_csv(contacts_file.getvalue())
+            if imported:
+                st.success(f"Imported or updated {imported} contact(s).")
+            for error in errors:
+                st.warning(error)
+    account_col, contact_col = st.columns(2)
+    with account_col:
+        st.markdown("**Add or update account**")
+        with st.form("crm_account_form"):
+            account_name = st.text_input("Account name", placeholder="Tata Motors")
+            account_website = st.text_input("Website", placeholder="https://www.example.com")
+            account_industry = st.text_input("Industry", placeholder="Automotive manufacturing")
+            account_notes = st.text_area("Account notes", placeholder="Context for this account.")
+            save_account_button = st.form_submit_button("Save account")
+            if save_account_button:
+                if not account_name.strip():
+                    st.warning("Enter an account name.")
+                else:
+                    save_account(company=account_name, website=account_website, industry=account_industry, notes=account_notes)
+                    st.success(f"Saved {account_name.strip()}.")
+    with contact_col:
+        st.markdown("**Add or update contact**")
+        accounts = list_accounts()
+        account_names = [item.get("company", "") for item in accounts if item.get("company")]
+        if account_names:
+            with st.form("crm_contact_form"):
+                contact_account = st.selectbox("Account", account_names)
+                contact_name = st.text_input("Contact name", placeholder="Jane Smith")
+                contact_role = st.text_input("Role", placeholder="Engineering Systems Manager")
+                contact_email = st.text_input("Email", placeholder="jane.smith@example.com")
+                contact_phone = st.text_input("Phone", placeholder="+1 555 0100")
+                contact_notes = st.text_area("Contact notes", placeholder="Role context or outreach notes.")
+                save_contact_button = st.form_submit_button("Save contact")
+                if save_contact_button:
+                    if not contact_name.strip():
+                        st.warning("Enter a contact name.")
+                    else:
+                        save_contact(account=contact_account, name=contact_name, role=contact_role, email=contact_email, phone=contact_phone, notes=contact_notes)
+                        st.success(f"Saved {contact_name.strip()} to {contact_account}.")
+            contacts = list_contacts()
+            if contacts:
+                st.dataframe([
+                    {"Account": item["account"], "Name": item["name"], "Role": item["role"], "Email": item["email"], "Phone": item["phone"]}
+                    for item in contacts
+                ], width="stretch", hide_index=True)
+        else:
+            st.caption("Add an account before adding contacts.")
 
 if "result" not in st.session_state:
     st.info("Enter a company above to generate a prospect qualification brief.")
@@ -121,9 +213,50 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-score_col, action_col, solution_col = st.columns([1.15, 1.5, 1.5])
+st.markdown("### CRM prospect record")
+crm_col, saved_col = st.columns([1.4, 1])
+with crm_col:
+    with st.form("crm_prospect_form"):
+        owner = st.text_input("Owner", placeholder="Akshar")
+        pipeline_status = st.selectbox("Pipeline status", PIPELINE_STATUSES, index=0)
+        follow_up_date = st.date_input("Follow-up date", value=None)
+        notes = st.text_area("CRM notes", placeholder="Add qualification notes or outreach context.")
+        save_crm = st.form_submit_button("Save prospect", type="primary")
+        if save_crm:
+            saved = save_prospect(
+                company=result.overview.name,
+                industry=result.overview.industry,
+                website=result.overview.website,
+                sales_score=qualification.sales_score,
+                research_quality=result.research_quality_score,
+                recommendation=qualification.sales_action,
+                solution=qualification.solution_recommendation,
+                primary_persona=sales_action.primary_target,
+                secondary_personas=sales_action.secondary_targets,
+                next_action=sales_action.next_action,
+                research_status=sales_action.research_confidence,
+                notes=notes,
+                owner=owner,
+                pipeline_status=pipeline_status,
+                follow_up_date=follow_up_date.isoformat() if follow_up_date else "",
+            )
+            st.success(f"Saved {saved['company']} to the local CRM.")
+with saved_col:
+    st.markdown("**Saved prospects**")
+    prospects = list_prospects()
+    if prospects:
+        st.dataframe([
+            {"Company": item.get("company", ""), "Status": item.get("pipeline_status", "NEW"), "Sales score": item.get("sales_score", ""), "Owner": item.get("owner", "")}
+            for item in prospects
+        ], width="stretch", hide_index=True)
+    else:
+        st.caption("No prospects saved yet.")
+
+score_col, quality_col, action_col, solution_col = st.columns([1.0, 1.0, 1.4, 1.4])
 with score_col:
     st.markdown(f'<div class="score"><div class="score-number">{qualification.sales_score}</div><div class="score-caption">SALES SCORE / 100</div></div>', unsafe_allow_html=True)
+with quality_col:
+    st.markdown(f'<div class="metric"><div class="metric-label">Research quality</div><div class="metric-value">{result.research_quality_score}/100</div></div>', unsafe_allow_html=True)
 with action_col:
     st.markdown(f'<div class="metric"><div class="metric-label">Recommended sales action</div><div class="metric-value">{escape(qualification.sales_action)}</div></div>', unsafe_allow_html=True)
 with solution_col:
@@ -162,6 +295,30 @@ else:
     st.info("No reliable public evidence found.")
 st.caption("NO PUBLIC EVIDENCE means the system was not identified in the sources reviewed; it does not mean the company does not use it.")
 
+plm_analysis = result.research_analysis.get("plm", {})
+if plm_analysis:
+    st.markdown("### PLM evidence synthesis")
+    st.table({
+        "Conclusion": [plm_analysis.get("value", "UNCERTAIN")],
+        "Status": [plm_analysis.get("status", "INSUFFICIENT DATA")],
+        "Confidence": [f"{plm_analysis.get('confidence', 0)}/100"],
+        "Evidence records": [len(plm_analysis.get("evidence", []))],
+        "Reasoning": [plm_analysis.get("reasoning", "No synthesis available.")],
+    })
+
+st.markdown("### Search coverage")
+coverage_rows = [{"Category": category, "Coverage": status} for category, status in result.coverage.items()]
+if coverage_rows:
+    st.table(coverage_rows)
+
+if result.gap_fields:
+    with st.expander("Why information is unavailable", expanded=False):
+        st.caption("These fields triggered targeted second-pass research and still lack reliable direct public evidence.")
+        for field in result.gap_fields:
+            st.markdown(f"**Field:** {field}")
+            st.markdown(f"**Status:** {result.coverage.get(field, 'NO PUBLIC EVIDENCE')}")
+            st.markdown("**Research performed:** planned web search, DuckDuckGo, Bing, GDELT, and relevant first-party/public sources")
+
 st.markdown("### Engineering complexity")
 complexity = result.engineering_complexity
 st.table({"Dimension": ["Product complexity", "Engineering complexity", "Manufacturing complexity", "Product categories", "Multi-site engineering", "Change management"], "Assessment": [complexity.product_complexity.value, complexity.engineering_complexity.value, complexity.manufacturing_complexity.value, complexity.product_categories.value, complexity.multi_site_engineering.value, complexity.change_management.value]})
@@ -169,13 +326,13 @@ st.info(complexity.explanation)
 
 st.markdown("### Buying signals")
 if result.buying_signals:
-    st.table([{"Signal": item.signal, "Date": item.date, "Evidence": item.evidence or item.why_it_matters, "Sales relevance": item.why_it_matters, "Source": f"[{item.source_name}]({item.source_url})"} for item in result.buying_signals])
+    st.table([{"Signal": item.signal, "Date": item.date, "Confidence": item.confidence, "Evidence": item.evidence or item.why_it_matters, "BWC action": item.recommended_action, "Source": f"[{item.source_name}]({item.source_url})"} for item in result.buying_signals])
 else:
     st.info("None identified in the recent public sources searched.")
 
 st.markdown("### Hiring signals")
 if result.hiring_signals:
-    st.table([{"Signal": item.signal, "Date": item.date, "Source": f"[{item.source_name}]({item.source_url})"} for item in result.hiring_signals])
+    st.table([{"Signal": item.signal, "Technology": item.technology, "Recency": item.recency, "Confidence": item.confidence, "Date": item.date, "Source": f"[{item.source_name}]({item.source_url})"} for item in result.hiring_signals])
 else:
     st.info("None identified in the public hiring sources searched.")
 
@@ -200,6 +357,23 @@ with st.expander("Score breakdown and recommendation reasoning", expanded=True):
 
 with st.expander("Research performed", expanded=False):
     research_log = result.research_performed
+    audit = result.research_audit
+    st.write(f"**Research mode:** {'GEMINI + GOOGLE SEARCH' if settings.gemini_api_key else 'NORMAL'}")
+    st.write(f"**Research tasks:** {audit.get('first_pass_tasks', 0)} first pass / {audit.get('second_pass_tasks', 0)} second pass")
+    st.write(f"**Planned queries:** {len(audit.get('initial_queries', []))} initial / {len(audit.get('followup_queries', []))} follow-up")
+    st.write(f"**Useful sources:** {audit.get('useful_sources', result.useful_result_count)}")
+    st.write(f"**Unique domains:** {audit.get('unique_domains', 0)}")
+    st.write(f"**Pages considered/read:** {audit.get('pages_considered', 0)} / {audit.get('pages_read', 0)}")
+    st.write(f"**Reader failures:** {audit.get('reader_failures', 0)}")
+    st.write(f"**SearXNG:** {'enabled' if audit.get('searxng_enabled') else 'disabled/fallback'}")
+    st.write(f"**Jina Reader:** {'enabled' if audit.get('jina_enabled') else 'disabled/fallback'}")
+    st.write("**Specialized modules:** " + ", ".join(audit.get("specialized_modules", [])))
+    st.write(f"**Wayback used:** {audit.get('wayback_used', False)} · **GitHub used:** {audit.get('github_used', False)}")
+    st.write(f"**Research quality:** {result.research_quality_score}/100")
+    if audit.get("provider_stats"):
+        st.write("**Free-provider diagnostics:**")
+        st.table([{"Provider": name, **stats} for name, stats in audit["provider_stats"].items()])
+    st.write("**Categories searched:** " + ", ".join(audit.get("categories_searched", [])))
     st.metric("Useful results", result.useful_result_count)
     st.write(f"**Queries searched:** {len(research_log.get('Queries searched', []))}")
     for query in research_log.get("Queries searched", []):
@@ -264,6 +438,6 @@ with st.expander("Evidence and sources", expanded=True):
         st.caption(result.research_note)
     if result.evidence:
         for item in result.evidence:
-            st.markdown(f'<div class="evidence"><p>{escape(item.statement)}</p><a class="source" href="{escape(item.source_url)}" target="_blank">Source: {escape(item.source_name)}</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="evidence"><p>{escape(item.statement)}</p><span class="source">{escape(item.fact_or_inference)} · {escape(item.confidence)} · {escape(item.source_type)}</span><br><a class="source" href="{escape(item.source_url)}" target="_blank">Source: {escape(item.source_name)}</a></div>', unsafe_allow_html=True)
     else:
         st.warning("No reliable public evidence found.")

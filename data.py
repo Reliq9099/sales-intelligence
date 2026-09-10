@@ -11,6 +11,15 @@ class Confidence(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class ResearchStatus(str, Enum):
+    CONFIRMED = "CONFIRMED"
+    LIKELY = "LIKELY"
+    INFERENCE = "INFERENCE"
+    NO_PUBLIC_EVIDENCE = "NO PUBLIC EVIDENCE"
+    INSUFFICIENT_DATA = "INSUFFICIENT DATA"
+    UNKNOWN = "UNKNOWN"
+
+
 class TriState(str, Enum):
     YES = "YES"
     NO = "NO"
@@ -40,6 +49,8 @@ class Evidence:
     signal: str = ""
     confidence: str = "MEDIUM"
     source_date: str = "Unknown"
+    source_type: str = "Public web"
+    fact_or_inference: str = "FACT"
 
 
 @dataclass(frozen=True)
@@ -61,6 +72,9 @@ class BuyingSignal:
     source_name: str = ""
     source_url: str = ""
     evidence: str = ""
+    confidence: str = "MEDIUM"
+    source_type: str = "PUBLIC_WEB"
+    recommended_action: str = "Validate in discovery."
 
 
 @dataclass(frozen=True)
@@ -69,6 +83,10 @@ class HiringSignal:
     date: str = "Unknown"
     source_name: str = ""
     source_url: str = ""
+    technology: str = ""
+    recency: str = "UNKNOWN"
+    confidence: str = "MEDIUM"
+    current_or_historical: str = "UNKNOWN"
 
 
 @dataclass
@@ -120,6 +138,16 @@ class ResearchResult:
     useful_result_count: int = 0
     provider_name: str = "Unknown"
     research_note: str = ""
+    canonical_name: str = ""
+    legal_name: str = ""
+    aliases: list[str] = field(default_factory=list)
+    parent_company: str = ""
+    identity_evidence: list[Evidence] = field(default_factory=list)
+    research_quality_score: int = 0
+    coverage: dict[str, str] = field(default_factory=dict)
+    research_audit: dict[str, object] = field(default_factory=dict)
+    gap_fields: list[str] = field(default_factory=list)
+    research_analysis: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass

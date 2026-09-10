@@ -3,3 +3,4 @@
 __pycache__/
 *.py[cod]
 .streamlit/
+crm_data.json
